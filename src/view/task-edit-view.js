@@ -1,6 +1,9 @@
-import AbstractView from '../framework/view/abstract-view.js';
+import AbstractStatefulView from '../framework/view/abstract-stateful-view.js';
 import {COLORS} from '../const.js';
 import {humanizeTaskDueDate, isTaskRepeating} from '../utils/task.js';
+import flatpickr from 'flatpickr';
+
+import 'flatpickr/dist/flatpickr.min.css';
 
 const BLANK_TASK = {
   color: COLORS[0],
@@ -19,13 +22,13 @@ const BLANK_TASK = {
   isFavorite: false,
 };
 
-function createTaskEditDateTemplate(dueDate) {
+function createTaskEditDateTemplate(dueDate, isDueDate) {
   return (
     `<button class="card__date-deadline-toggle" type="button">
-      date: <span class="card__date-status">${dueDate !== null ? 'yes' : 'no'}</span>
+      date: <span class="card__date-status">${isDueDate ? 'yes' : 'no'}</span>
     </button>
 
-    ${dueDate !== null ? `<fieldset class="card__date-deadline">
+    ${isDueDate ? `<fieldset class="card__date-deadline">
       <label class="card__input-deadline-wrap">
         <input
           class="card__date"
@@ -40,13 +43,13 @@ function createTaskEditDateTemplate(dueDate) {
   );
 }
 
-function createTaskEditRepeatingTemplate(repeating) {
+function createTaskEditRepeatingTemplate(repeating, isRepeating) {
   return (
     `<button class="card__repeat-toggle" type="button">
-      repeat:<span class="card__repeat-status">${isTaskRepeating(repeating) ? 'yes' : 'no'}</span>
+      repeat:<span class="card__repeat-status">${isRepeating ? 'yes' : 'no'}</span>
     </button>
 
-  ${isTaskRepeating(repeating) ? `<fieldset class="card__repeat-days">
+  ${isRepeating ? `<fieldset class="card__repeat-days">
     <div class="card__repeat-days-inner">
       ${Object.entries(repeating).map(([day, repeat]) => `<input
         class="visually-hidden card__repeat-day-input"
@@ -81,17 +84,19 @@ function createTaskEditColorsTemplate(currentColor) {
 }
 
 function createTaskEditTemplate(data) {
-  const {color, description, dueDate, repeating} = data;
+  const {color, description, dueDate, repeating, isDueDate, isRepeating} = data;
 
-  const dateTemplate = createTaskEditDateTemplate(dueDate);
+  const dateTemplate = createTaskEditDateTemplate(dueDate, isDueDate);
 
-  const repeatingClassName = isTaskRepeating(repeating)
+  const repeatingClassName = isRepeating
     ? 'card--repeat'
     : '';
 
-  const repeatingTemplate = createTaskEditRepeatingTemplate(repeating);
+  const repeatingTemplate = createTaskEditRepeatingTemplate(repeating, isRepeating);
 
   const colorsTemplate = createTaskEditColorsTemplate(color);
+
+  const isSubmitDisabled = (isDueDate && dueDate === null) || (isRepeating && !isTaskRepeating(repeating));
 
   return (
     `<article class="card card--edit card--${color} ${repeatingClassName}">
@@ -131,7 +136,7 @@ function createTaskEditTemplate(data) {
           </div>
 
           <div class="card__status-btns">
-            <button class="card__save" type="submit">save</button>
+            <button class="card__save" type="submit" ${isSubmitDisabled ? 'disabled' : ''}>save</button>
             <button class="card__delete" type="button">delete</button>
           </div>
         </div>
@@ -140,25 +145,155 @@ function createTaskEditTemplate(data) {
   );
 }
 
-export default class TaskEditView extends AbstractView {
-  #task = null;
+export default class TaskEditView extends AbstractStatefulView {
   #handleFormSubmit = null;
+  #datepicker = null;
 
   constructor({task = BLANK_TASK, onFormSubmit}) {
     super();
-    this.#task = task;
+    this._setState(TaskEditView.parseTaskToState(task));
     this.#handleFormSubmit = onFormSubmit;
 
-    this.element.querySelector('form')
-      .addEventListener('submit', this.#formSubmitHandler);
+    this._restoreHandlers();
   }
 
   get template() {
-    return createTaskEditTemplate(this.#task);
+    return createTaskEditTemplate(this._state);
   }
+
+  // Перегружаем метод родителя removeElement,
+  // чтобы при удалении удалялся более не нужный календарь
+  removeElement() {
+    super.removeElement();
+
+    if (this.#datepicker) {
+      this.#datepicker.destroy();
+      this.#datepicker = null;
+    }
+  }
+
+  reset(task) {
+    this.updateElement(
+      TaskEditView.parseTaskToState(task),
+    );
+  }
+
+  _restoreHandlers() {
+    this.element.querySelector('form')
+      .addEventListener('submit', this.#formSubmitHandler);
+    this.element.querySelector('.card__date-deadline-toggle')
+      .addEventListener('click', this.#dueDateToggleHandler);
+    this.element.querySelector('.card__repeat-toggle')
+      .addEventListener('click', this.#repeatingToggleHandler);
+    this.element.querySelector('.card__text')
+      .addEventListener('input', this.#descriptionInputHandler);
+    this.element.querySelector('.card__colors-wrap')
+      .addEventListener('change', this.#colorChangeHandler);
+
+    if (this._state.isRepeating) {
+      this.element.querySelector('.card__repeat-days-inner')
+        .addEventListener('change', this.#repeatingChangeHandler);
+    }
+
+    this.#setDatepicker();
+  }
+
+  #colorChangeHandler = (evt) => {
+    evt.preventDefault();
+    this.updateElement({
+      color: evt.target.value,
+    });
+  };
+
+  #descriptionInputHandler = (evt) => {
+    evt.preventDefault();
+    this._setState({
+      description: evt.target.value,
+    });
+  };
+
+  #dueDateChangeHandler = ([userDate]) => {
+    this.updateElement({
+      dueDate: userDate,
+    });
+  };
+
+  #dueDateToggleHandler = (evt) => {
+    evt.preventDefault();
+    this.updateElement({
+      isDueDate: !this._state.isDueDate,
+      // Логика следующая: если выбор даты нужно показать,
+      // то есть когда "!this._state.isDueDate === true",
+      // тогда isRepeating должно быть строго false.
+      isRepeating: !this._state.isDueDate ? false : this._state.isRepeating,
+    });
+  };
 
   #formSubmitHandler = (evt) => {
     evt.preventDefault();
-    this.#handleFormSubmit(this.#task);
+    this.#handleFormSubmit(TaskEditView.parseStateToTask(this._state));
   };
+
+  #repeatingToggleHandler = (evt) => {
+    evt.preventDefault();
+    this.updateElement({
+      isRepeating: !this._state.isRepeating,
+      // Аналогично, но наоборот, для повторения
+      isDueDate: !this._state.isRepeating ? false : this._state.isDueDate,
+    });
+  };
+
+  #repeatingChangeHandler = (evt) => {
+    evt.preventDefault();
+    this.updateElement({
+      repeating: {...this._state.repeating, [evt.target.value]: evt.target.checked},
+    });
+  };
+
+  #setDatepicker() {
+    if (this._state.isDueDate) {
+      // flatpickr есть смысл инициализировать только в случае,
+      // если поле выбора даты доступно для заполнения
+      this.#datepicker = flatpickr(
+        this.element.querySelector('.card__date'),
+        {
+          dateFormat: 'j F',
+          defaultDate: this._state.dueDate,
+          onChange: this.#dueDateChangeHandler, // На событие flatpickr передаём наш колбэк
+        },
+      );
+    }
+  }
+
+  static parseTaskToState(task) {
+    return {...task,
+      isDueDate: task.dueDate !== null,
+      isRepeating: isTaskRepeating(task.repeating),
+    };
+  }
+
+  static parseStateToTask(state) {
+    const task = {...state};
+
+    if (!task.isDueDate) {
+      task.dueDate = null;
+    }
+
+    if (!task.isRepeating) {
+      task.repeating = {
+        mo: false,
+        tu: false,
+        we: false,
+        th: false,
+        fr: false,
+        sa: false,
+        su: false,
+      };
+    }
+
+    delete task.isDueDate;
+    delete task.isRepeating;
+
+    return task;
+  }
 }
