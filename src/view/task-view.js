@@ -1,5 +1,5 @@
-import {createElement} from '../render.js';
-import {humanizeTaskDueDate, isTaskExpired, isTaskRepeating} from '../utils.js';
+import AbstractView from '../framework/view/abstract-view.js';
+import {humanizeTaskDueDate, isTaskExpired, isTaskRepeating} from '../utils/task.js';
 
 function createTaskTemplate(task) {
   const {color, description, dueDate, repeating, isArchive, isFavorite} = task;
@@ -68,27 +68,43 @@ function createTaskTemplate(task) {
   );
 }
 
-export default class TaskView {
-  #element = null;
+export default class TaskView extends AbstractView {
   #task = null;
+  #handleEditClick = null;
+  #handleFavoriteClick = null;
+  #handleArchiveClick = null;
 
-  constructor({task}) {
+  constructor({task, onEditClick, onFavoriteClick, onArchiveClick}) {
+    super();
     this.#task = task;
+    this.#handleEditClick = onEditClick;
+    this.#handleFavoriteClick = onFavoriteClick;
+    this.#handleArchiveClick = onArchiveClick;
+
+    this.element.querySelector('.card__btn--edit')
+      .addEventListener('click', this.#editClickHandler);
+    this.element.querySelector('.card__btn--favorites')
+      .addEventListener('click', this.#favoriteClickHandler);
+    this.element.querySelector('.card__btn--archive')
+      .addEventListener('click', this.#archiveClickHandler);
   }
 
   get template() {
     return createTaskTemplate(this.#task);
   }
 
-  get element() {
-    if (!this.#element) {
-      this.#element = createElement(this.template);
-    }
+  #editClickHandler = (evt) => {
+    evt.preventDefault();
+    this.#handleEditClick();
+  };
 
-    return this.#element;
-  }
+  #favoriteClickHandler = (evt) => {
+    evt.preventDefault();
+    this.#handleFavoriteClick();
+  };
 
-  removeElement() {
-    this.#element = null;
-  }
+  #archiveClickHandler = (evt) => {
+    evt.preventDefault();
+    this.#handleArchiveClick();
+  };
 }
